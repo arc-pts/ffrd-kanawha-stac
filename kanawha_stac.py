@@ -124,9 +124,15 @@ def create_ras_model_collection(key_base: str):
             spatial_extent = pystac.SpatialExtent([geom_extents.bounds])
             temporal_extent = pystac.TemporalExtent(intervals=[datetime.now(), datetime.now()])
             collection.extent = pystac.Extent(spatial=spatial_extent, temporal=temporal_extent)
-        if filename.endswith('.p01.hdf'):
+            asset.media_type = pystac.MediaType.HDF5
+        elif filename.endswith('.p01.hdf'):
             plan_attrs = get_plan_attrs(obj.key, results=False)
             asset.extra_fields = plan_attrs
+            asset.media_type = pystac.MediaType.HDF5
+        elif filename.endswith('.hdf'):
+            asset.media_type = pystac.MediaType.HDF5
+        elif filename.split('.')[-1] in ['b01', 'bco01', 'g01', 'p01', 'u01', 'x01']:
+            asset.media_type = pystac.MediaType.TEXT
         collection.add_asset(key=filename, asset=asset)
     return collection
 
@@ -165,6 +171,13 @@ def get_ras_output_assets(key_base: str, r: int, s: int) -> List[pystac.Asset]:
         if obj.key.endswith('.p01.hdf'):
             results_attrs = get_plan_attrs(obj.key)
             asset.extra_fields = results_attrs
+            asset.roles = ['ras-output']
+            asset.media_type = pystac.MediaType.HDF5
+        elif obj.key.endswith('.log'):
+            asset.roles = ['ras-output-logs']
+            asset.media_type = pystac.MediaType.TEXT
+        asset.extra_fields['realization'] = r
+        asset.extra_fields['simulation'] = s
         assets.append(asset)
     return assets
 
@@ -173,13 +186,17 @@ def create_realization_ras_results_item(key_base: str, r: int):
     basename = os.path.basename(key_base)
     realization = f"r{str(r).zfill(4)}"
     fake_bbox = get_fake_extent().spatial.bboxes[0]
-    fake_geometry = get_fake_geometry()
+    # fake_geometry = get_fake_geometry()
+    geometry = get_2d_flow_area_perimeter(key_base + '.g01.hdf')
+    bbox = geometry.bounds
     item = pystac.Item(
         id=f"{RAS_MODELS_COLLECTION_ID}-{basename}-{realization}-ras",
         properties={},
-        bbox=fake_bbox,
+        # bbox=fake_bbox,
+        bbox=bbox,
         datetime=datetime.now(),
-        geometry=json.loads(shapely.to_geojson(fake_geometry)),
+        # geometry=json.loads(shapely.to_geojson(fake_geometry)),
+        geometry=json.loads(shapely.to_geojson(geometry)),
     )
     print('getting assets')
     for s in range(1, SIMULATIONS):
@@ -221,7 +238,16 @@ def gather_depth_grid_items(key_base: str, r: int):
             dg_asset = pystac.Asset(
                 href=obj_key_to_s3_url(depth_grid.key),
                 title=f"{realization}-{simulation}-{basename}-{filename}",
+                media_type=pystac.MediaType.GEOTIFF,
+                roles=['ras-depth-grid'],
+                extra_fields={
+                    'realization': r,
+                    'simulation': s,
+                }
             )
+            dg_metadata = get_raster_metadata(depth_grid.key)
+            if dg_metadata:
+                dg_asset.extra_fields.update(dg_metadata)
             depth_grid_items[filename].add_asset(key=dg_asset.title, asset=dg_asset)
     return depth_grid_items.values()
 
@@ -273,35 +299,17 @@ def get_raster_bounds(s3_key: str):
             bounds_4326 = rasterio.warp.transform_bounds(crs, 'EPSG:4326', *bounds)
             return bounds_4326
 
-@dataclass
-class RasResultsAttrs:
-    # Results -> Unsteady
-    plan_title: Optional[str]
-    program_name: Optional[str]
-    program_version: Optional[str]
-    project_file_name: Optional[str]
-    project_title: Optional[str]
-    short_id: Optional[str]
-    simulation_time_window: Optional[str]
-    # simulation_time_window_begin: Optional[datetime]
-    # simulation_time_window_end: Optional[datetime]
-    type_of_run: Optional[str]
 
-    # Results -> Unsteady -> Summary
-    computation_time_dss: Optional[str]
-    computation_time_total: Optional[str]
-    maximum_wsel_error: Optional[float]
-    run_time_window: Optional[str]
-    solution: Optional[str]
-    time_solution_went_unstable: Optional[float]
-    time_stamp_solution_went_unstable: Optional[str]
+def get_raster_metadata(s3_key: str) -> dict:
+    s3_path = f"s3://{BUCKET_NAME}/{s3_key}"
+    with rasterio.Env(AWS_SESSION):
+        with rasterio.open(s3_path) as src:
+            return src.tags(1)
 
-    # Results -> Unsteady -> Summary -> Volume Accounting
-    error: Optional[float]
-    error_percent: Optional[float]
-    precipitation_excess_acre_feet: Optional[float]
-    precipitation_excess_inches: Optional[float]
-    total_boundary_flux_of_water_in: Optional[float]
+
+def get_raster_info(s3_key: str) -> dict:
+    print(f"getting raster bounds: {s3_key}")
+    s3_path = f"s3://{BUCKET_NAME}/{s3_key}"
     
 
 def to_snake_case(text):
@@ -430,19 +438,27 @@ def parse_duration(duration_str: str) -> timedelta:
     return duration
 
 
-def ras_geom_extents(extents, proj_wkt: str) -> shapely.Polygon:
-    # min_x, max_x, min_y, max_y = [float(x) for x in extents_str[1:-1].split()]
-    min_x, max_x, min_y, max_y = extents
+def geom_to_4326(s: shapely.Geometry, proj_wkt: str) -> shapely.Geometry:
     source_crs = pyproj.CRS.from_wkt(proj_wkt)
     target_crs = pyproj.CRS.from_epsg(4326)
     transformer = pyproj.Transformer.from_proj(source_crs, target_crs, always_xy=True)
+    return shapely.ops.transform(transformer.transform, s)
+
+
+def ras_geom_extents(extents, proj_wkt: str) -> shapely.Polygon:
+    # min_x, max_x, min_y, max_y = [float(x) for x in extents_str[1:-1].split()]
+    min_x, max_x, min_y, max_y = extents
+    # source_crs = pyproj.CRS.from_wkt(proj_wkt)
+    # target_crs = pyproj.CRS.from_epsg(4326)
+    # transformer = pyproj.Transformer.from_proj(source_crs, target_crs, always_xy=True)
     extents = shapely.Polygon([
         [min_x, min_y],
         [min_x, max_y],
         [max_x, max_y],
         [max_x, min_y],
     ])
-    extents_transformed = shapely.ops.transform(transformer.transform, extents)
+    # extents_transformed = shapely.ops.transform(transformer.transform, extents)
+    extents_transformed = geom_to_4326(extents, proj_wkt)
     return extents_transformed
 
 
@@ -564,7 +580,11 @@ def asset_extra_fields_intersection(item: pystac.Item) -> dict:
 
 def drop_common_fields(extra_fields: dict, common: dict) -> dict:
     difference = set(extra_fields) - set(common)
-    return {k: extra_fields[k] for k in difference}
+    result = {k: extra_fields[k] for k in difference} 
+    realization = extra_fields.get('realization')
+    if realization is not None:
+        result['realization'] = realization  # don't drop the realization number
+    return result
 
 
 def dedupe_asset_metadata(item: pystac.Item):
@@ -572,6 +592,18 @@ def dedupe_asset_metadata(item: pystac.Item):
         if k.endswith('.p01.hdf'):
             deduped_extra_fields = drop_common_fields(v.extra_fields, item.properties)
             item.assets[k].extra_fields = deduped_extra_fields
+
+
+def get_2d_flow_area_perimeter(model_g01_key) -> Optional[shapely.Polygon]:
+    h5f = open_s3_hdf5(model_g01_key)
+    projection = h5f.attrs['Projection'].decode()
+    d2_flow_area = get_first_group(h5f['Geometry']['2D Flow Areas'])
+    if not d2_flow_area:
+        return None
+    perim = d2_flow_area['Perimeter']
+    perim_coords = perim[:]
+    perim_polygon = shapely.Polygon(perim_coords).simplify(0.001)
+    return geom_to_4326(perim_polygon, projection)
 
 
 def main():
@@ -595,8 +627,6 @@ def main():
         ras_model_collection.add_child(realization_collection)
 
         item = create_realization_ras_results_item(ras_model_key_base, 1)
-        item.bbox = ras_model_collection.extent.spatial.bboxes[0]
-        item.geometry = json.loads(shapely.to_geojson(bbox_to_polygon(item.bbox)))
         item.properties = asset_extra_fields_intersection(item)
         realization_collection.add_item(item)
         dedupe_asset_metadata(item)
@@ -610,7 +640,7 @@ def main():
 
     catalog.add_child(ras_models_parent_collection)
     catalog.normalize_and_save(root_href=ROOT_HREF, catalog_type=pystac.CatalogType.SELF_CONTAINED)
-    print(CATALOG_URL)
+    # print(CATALOG_URL)
 
 
 if __name__ == "__main__":
