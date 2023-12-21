@@ -32,5 +32,8 @@ def upload_files_to_s3(bucket_name, directory):
 if __name__ == '__main__':
     bucket_name = 'wsp-kanawha-pilot-stac'
     directory = './stac/'
-    delete_all_objects(bucket_name)
+    # delete_all_objects(bucket_name)
     upload_files_to_s3(bucket_name, directory)
+    root_dir = os.listdir(directory)[0]
+    url = f"https://radiantearth.github.io/stac-browser/#/external/wsp-kanawha-pilot-stac.s3.amazonaws.com/{root_dir}/catalog.json"
+    print(url)

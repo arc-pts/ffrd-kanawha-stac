@@ -28,13 +28,16 @@ s3 = boto3.resource('s3')
 BUCKET_NAME = 'kanawha-pilot'
 BUCKET = s3.Bucket(BUCKET_NAME)
 
-ROOT_HREF = "./stac/kanawha-models"
+CATALOG_TIMESTAMP = datetime.now().strftime('%Y%m%d-%H%M')
+ROOT_HREF = f"./stac/kanawha-models-{CATALOG_TIMESTAMP}"
 
 MODELS_CATALOG_ID = "kanawha-models"
 RAS_MODELS_COLLECTION_ID = f"{MODELS_CATALOG_ID}-ras"
 
-SIMULATIONS = 100
-DEPTH_GRIDS = 100
+CATALOG_URL = f"https://radiantearth.github.io/stac-browser/#/external/wsp-kanawha-pilot-stac.s3.amazonaws.com/{MODELS_CATALOG_ID}-{CATALOG_TIMESTAMP}/catalog.json"
+
+SIMULATIONS = 4
+DEPTH_GRIDS = 5
 
 AWS_SESSION = AWSSession(boto3.Session())
 
@@ -351,6 +354,8 @@ def convert_hdf5_string(value: str):
 
 
 def convert_hdf5_value(value):
+    # TODO (?): handle "8-bit bitfield" values in 2D Flow Area groups
+
     # Check for NaN (np.nan)
     if isinstance(value, np.floating) and np.isnan(value):
         return None
@@ -449,6 +454,13 @@ def open_s3_hdf5(s3_hdf5_key: str) -> h5py.File:
     return h5py.File(s3f.open(), mode='r')
 
 
+def get_first_group(parent_group: h5py.Group) -> Optional[h5py.Group]:
+    for _, item in parent_group.items():
+        if isinstance(item, h5py.Group):
+            return item
+    return None
+
+
 def get_geom_attrs(model_g01_key: str) -> dict:
     h5f = open_s3_hdf5(model_g01_key)    
 
@@ -458,16 +470,15 @@ def get_geom_attrs(model_g01_key: str) -> dict:
 
     geometry = h5f['Geometry']
     geometry_attrs = hdf5_attrs_to_dict(geometry.attrs, prefix="geometry")
-    # geometry_attrs['geometry:geometry_title'] = geometry_attrs['geometry:title']
-    # del geometry_attrs['geometry:title']
-    # geometry_attrs['geometry:geometry_time'] = parse_ras_datetime(geometry_attrs['geometry:geometry_time']).isoformat()
-    # geometry_attrs['geometry:land_cover_date_last_modified'] = parse_ras_datetime(geometry_attrs['geometry:land_cover_date_last_modified']).isoformat()
-    # geometry_attrs['geometry:land_cover_file_date'] = parse_ras_datetime(geometry_attrs['geometry:land_cover_file_date']).isoformat()
-    # geometry_attrs['geometry:terrain_file_date'] = parse_ras_datetime(geometry_attrs['geometry:terrain_file_date']).isoformat()
-
     attrs.update(geometry_attrs)
 
-    print(attrs)
+    structures = geometry['Structures']
+    structures_attrs = hdf5_attrs_to_dict(structures.attrs, prefix="structures")
+    attrs.update(structures_attrs)
+
+    d2_flow_area = get_first_group(geometry['2D Flow Areas'])
+    d2_flow_area_attrs = hdf5_attrs_to_dict(d2_flow_area.attrs, prefix="2d_flow_area")
+    attrs.update(d2_flow_area_attrs)
 
     return attrs
 
@@ -489,18 +500,23 @@ def get_plan_attrs(model_p01_key: str, results: bool = True) -> dict:
     plan_param_attrs = hdf5_attrs_to_dict(plan_parameters.attrs, prefix="Plan Parameters")
     attrs.update(plan_param_attrs)
 
+    precip = h5f['Event Conditions']['Meteorology']['Precipitation']
+    precip_attrs = hdf5_attrs_to_dict(precip.attrs, prefix="Meteorology")
+    attrs.update(precip_attrs)
+
     if results:
-        plan_results_attrs = get_plan_results_attrs(model_p01_key)
+        plan_results_attrs = get_plan_results_attrs(model_p01_key, h5f=h5f)
         attrs.update(plan_results_attrs)
     return attrs
 
 
-def get_plan_results_attrs(model_p01_key: str) -> dict:
+def get_plan_results_attrs(model_p01_key: str, h5f: Optional[h5py.File] = None) -> dict:
     # s3url = f"s3://{BUCKET_NAME}/{model_p01_key}"
     # print(f'ffspec.open: {s3url}')
     # s3f = fsspec.open(s3url, mode='rb')
     # h5f = h5py.File(s3f.open(), mode='r')
-    h5f = open_s3_hdf5(model_p01_key)
+    if not h5f:
+        h5f = open_s3_hdf5(model_p01_key)
     results_attrs = {}
 
     unsteady_results = h5f['Results']['Unsteady']
@@ -547,6 +563,18 @@ def asset_extra_fields_intersection(item: pystac.Item) -> dict:
     return intersection
 
 
+def drop_common_fields(extra_fields: dict, common: dict) -> dict:
+    difference = set(extra_fields) - set(common)
+    return {k: extra_fields[k] for k in difference}
+
+
+def dedupe_asset_metadata(item: pystac.Item):
+    for k, v in item.assets.items():
+        if k.endswith('.p01.hdf'):
+            deduped_extra_fields = drop_common_fields(v.extra_fields, item.properties)
+            item.assets[k].extra_fields = deduped_extra_fields
+
+
 def main():
     stac_path = Path('./stac')
     if stac_path.exists():
@@ -572,7 +600,7 @@ def main():
         item.geometry = json.loads(shapely.to_geojson(bbox_to_polygon(item.bbox)))
         item.properties = asset_extra_fields_intersection(item)
         realization_collection.add_item(item)
-
+        dedupe_asset_metadata(item)
         depth_grids_collection = create_depth_grids_collection(ras_model_key_base, 1)
         realization_collection.add_child(depth_grids_collection)
 
@@ -583,6 +611,7 @@ def main():
 
     catalog.add_child(ras_models_parent_collection)
     catalog.normalize_and_save(root_href=ROOT_HREF, catalog_type=pystac.CatalogType.SELF_CONTAINED)
+    print(CATALOG_URL)
 
 
 if __name__ == "__main__":
