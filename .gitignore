@@ -4,6 +4,9 @@ stac
 # venv
 venv*
 
+# other .env files
+.env*
+
 # Created by https://www.toptal.com/developers/gitignore/api/python,linux,vim
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,linux,vim
 
