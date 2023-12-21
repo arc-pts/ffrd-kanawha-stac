@@ -417,7 +417,6 @@ def parse_ras_simulation_window_datetime(datetime_str) -> datetime:
 
 def parse_run_time_window(window: str) -> Tuple[datetime, datetime]:
     split = window.split(' to ')
-    format = '%d%b%Y %H:%M:%S'
     begin = parse_ras_datetime(split[0])
     end = parse_ras_datetime(split[1])
     return begin, end
