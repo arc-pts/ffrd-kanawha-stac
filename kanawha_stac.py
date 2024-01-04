@@ -23,7 +23,7 @@ import pyproj
 from mypy_boto3_s3.service_resource import Object, ObjectSummary
 import logging
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -41,7 +41,7 @@ RAS_MODELS_COLLECTION_ID = f"{MODELS_CATALOG_ID}-ras"
 
 CATALOG_URL = f"https://radiantearth.github.io/stac-browser/#/external/wsp-kanawha-pilot-stac.s3.amazonaws.com/{MODELS_CATALOG_ID}-{CATALOG_TIMESTAMP}/catalog.json"
 
-SIMULATIONS = 100
+SIMULATIONS = 5
 DEPTH_GRIDS = 100
 
 AWS_SESSION = AWSSession(boto3.Session())
@@ -174,6 +174,7 @@ def create_ras_model_realization_collection(key_base: str, r: int):
 
 
 def get_ras_output_assets(key_base: str, r: int, s: int) -> List[pystac.Asset]:
+    logger.info(f"Getting RAS output assets: {r} {s} {key_base}")
     basename = os.path.basename(key_base)
     ras_output_objs = filter_objects(
         pattern=rf"^FFRD_Kanawha_Compute\/runs\/{s}\/ras\/{basename}\/.*$",
@@ -193,6 +194,7 @@ def get_ras_output_assets(key_base: str, r: int, s: int) -> List[pystac.Asset]:
         )
         if obj.key.endswith('.p01.hdf'):
             results_attrs = get_plan_attrs(obj.key)
+            # results_attrs = get_plan_results_attrs(obj.key)
             asset.extra_fields = results_attrs
             asset.roles = ['ras-output']
             asset.media_type = pystac.MediaType.HDF5
@@ -259,15 +261,20 @@ def gather_depth_grid_items(key_base: str, r: int):
     basename = os.path.basename(key_base)
     realization = f"r{str(r).zfill(4)}"
     depth_grid_items: Dict[str, pystac.Item] = {}
+    raster_bounds = {}
     for s in range(1, SIMULATIONS):
         simulation = get_simulation_string(s)
+        logger.info(f"Gathering depth grid items for {simulation}, {basename}")
         depth_grids = depth_grids_for_model_run(key_base, s)
         for depth_grid in depth_grids[:DEPTH_GRIDS]:
         # for depth_grid in depth_grids:
             filename = os.path.basename(depth_grid.key)
-            logger.info(f"{simulation}, {depth_grid.key}")
             if not filename in depth_grid_items.keys():
-                bbox = get_raster_bounds(depth_grid.key)
+                if not filename in raster_bounds:
+                    bbox = get_raster_bounds(depth_grid.key)
+                    raster_bounds[filename] = bbox
+                else:
+                    bbox = raster_bounds[filename]
                 geometry = bbox_to_polygon(bbox)
                 depth_grid_items[filename] = pystac.Item(
                     id=f"{basename}-{realization}-{filename}",
@@ -277,7 +284,7 @@ def gather_depth_grid_items(key_base: str, r: int):
                     datetime=datetime.now(),
                     geometry=json.loads(shapely.to_geojson(geometry)),
                 )
-            non_null = not raster_is_all_null(depth_grid.key)
+            # non_null = not raster_is_all_null(depth_grid.key)
             dg_asset = pystac.Asset(
                 href=obj_key_to_s3_url(depth_grid.key),
                 title=f"{realization}-{simulation}-{basename}-{filename}",
@@ -286,7 +293,7 @@ def gather_depth_grid_items(key_base: str, r: int):
                 extra_fields={
                     'cloud_wat:realization': r,
                     'cloud_wat:simulation': s,
-                    'non_null': non_null,
+                    # 'non_null': non_null,
                 },
             )
             dg_asset.extra_fields.update(get_basic_object_metadata(depth_grid))
