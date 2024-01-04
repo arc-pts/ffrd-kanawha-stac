@@ -23,9 +23,19 @@ import pyproj
 from mypy_boto3_s3.service_resource import Object, ObjectSummary
 import logging
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", stream=sys.stdout, level=logging.INFO)
-logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+stdout_handler = logging.StreamHandler()
+file_handler = logging.FileHandler('stac.log')
+
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+stdout_handler.setFormatter(formatter)
+file_handler.setFormatter(formatter)
+
+logger.addHandler(stdout_handler)
+logger.addHandler(file_handler)
 
 load_dotenv()
 
@@ -41,8 +51,8 @@ RAS_MODELS_COLLECTION_ID = f"{MODELS_CATALOG_ID}-ras"
 
 CATALOG_URL = f"https://radiantearth.github.io/stac-browser/#/external/wsp-kanawha-pilot-stac.s3.amazonaws.com/{MODELS_CATALOG_ID}-{CATALOG_TIMESTAMP}/catalog.json"
 
-SIMULATIONS = 5
-DEPTH_GRIDS = 100
+SIMULATIONS = 1001 + 1
+# DEPTH_GRIDS = 100
 
 AWS_SESSION = AWSSession(boto3.Session())
 
@@ -266,8 +276,8 @@ def gather_depth_grid_items(key_base: str, r: int):
         simulation = get_simulation_string(s)
         logger.info(f"Gathering depth grid items for {simulation}, {basename}")
         depth_grids = depth_grids_for_model_run(key_base, s)
-        for depth_grid in depth_grids[:DEPTH_GRIDS]:
-        # for depth_grid in depth_grids:
+        # for depth_grid in depth_grids[:DEPTH_GRIDS]:
+        for depth_grid in depth_grids:
             filename = os.path.basename(depth_grid.key)
             if not filename in depth_grid_items.keys():
                 if not filename in raster_bounds:
@@ -713,6 +723,7 @@ def get_temporal_extent_from_item_assets(item: pystac.Item) -> pystac.TemporalEx
 
 
 def main():
+    t1 = datetime.now()
     stac_path = Path('./stac')
     if stac_path.exists():
         shutil.rmtree(stac_path)
@@ -752,7 +763,9 @@ def main():
     catalog.add_child(ras_models_parent_collection)
     catalog.normalize_and_save(root_href=ROOT_HREF, catalog_type=pystac.CatalogType.SELF_CONTAINED)
     # print(CATALOG_URL)
-
+    logger.info("Done.")
+    t2 = datetime.now()
+    logger.info(f"Took: {(t2 - t1).total_seconds() / 60:0.2f} min")
 
 if __name__ == "__main__":
     main()
