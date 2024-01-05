@@ -748,7 +748,7 @@ def get_2d_flow_area_perimeter(model_g01_key) -> Optional[shapely.Polygon]:
 
 def get_datetime_from_item_assets(item: pystac.Item) -> datetime:
     latest = datetime.fromtimestamp(0, tz=timezone.utc)
-    for _, asset in item.get_assets().items():
+    for asset in item.assets.values():
         last_modified = asset.extra_fields.get('last_modified')
         if last_modified:
             dt = datetime.fromisoformat(last_modified)
