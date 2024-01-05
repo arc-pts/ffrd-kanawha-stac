@@ -52,7 +52,8 @@ RAS_MODELS_COLLECTION_ID = f"{MODELS_CATALOG_ID}-ras"
 CATALOG_URL = f"https://radiantearth.github.io/stac-browser/#/external/wsp-kanawha-pilot-stac.s3.amazonaws.com/{MODELS_CATALOG_ID}-{CATALOG_TIMESTAMP}/catalog.json"
 
 SIMULATIONS = 1001 + 1
-# DEPTH_GRIDS = 100
+# SIMULATIONS = 10
+# DEPTH_GRIDS = 10
 
 AWS_SESSION = AWSSession(boto3.Session())
 
@@ -203,8 +204,7 @@ def get_ras_output_assets(key_base: str, r: int, s: int) -> List[pystac.Asset]:
             title=simulation_filename,
         )
         if obj.key.endswith('.p01.hdf'):
-            results_attrs = get_plan_attrs(obj.key)
-            # results_attrs = get_plan_results_attrs(obj.key)
+            results_attrs = get_plan_results_attrs(obj.key)
             asset.extra_fields = results_attrs
             asset.roles = ['ras-output']
             asset.media_type = pystac.MediaType.HDF5
@@ -221,34 +221,80 @@ def get_ras_output_assets(key_base: str, r: int, s: int) -> List[pystac.Asset]:
     return assets
 
 
+def get_ras_realization_metadata(key_base: str, r: int, s: int = 1) -> dict:
+    logger.info(f"Getting RAS output metadata for realization: {r} {key_base} (s={s})")
+    basename = os.path.basename(key_base)
+    ras_output_objs = filter_objects(
+        pattern=rf"^FFRD_Kanawha_Compute\/runs\/{s}\/ras\/{basename}\/.*\.p01.hdf$",
+        prefix=f"FFRD_Kanawha_Compute/runs/{s}/ras/{basename}",
+    )
+    plan_attrs = {
+        'cloud_wat:realization': r,
+    }
+    for obj in ras_output_objs:
+        if obj.key.endswith(".p01.hdf"):
+            plan_attrs.update(get_plan_attrs(obj.key, results=False))
+            return plan_attrs
+    return plan_attrs
+
+
+def asset_field_values(assets: List[pystac.Asset], field: str, media_type: pystac.MediaType = pystac.MediaType.HDF5) -> list:
+    values = []
+    for asset in assets:
+        if asset.media_type == media_type:
+            value = asset.extra_fields.get(field)
+            if value is not None:
+                values.append(value)
+    return values
+
+
+def get_ras_simulation_stats(assets: List[pystac.Asset]) -> dict:
+    logger.info("Getting RAS simulation stats")
+    computation_time_total_minutes = asset_field_values(assets, 'results_summary:computation_time_total_minutes')
+    run_time_windows = asset_field_values(assets, 'results_summary:run_time_window')
+    run_time_starts = [i[0] for i in run_time_windows]
+    run_time_stops = [i[1] for i in run_time_windows]
+    error_percents = asset_field_values(assets, 'volume_accounting:error_percent')
+    solutions = asset_field_values(assets, 'results_summary:solution')
+    stats = {
+        "cloud_wat:simulations": len([a for a in assets if a.has_role('ras-output') and a.media_type == pystac.MediaType.HDF5]),
+        "cloud_wat:min_computation_time_mins": min(computation_time_total_minutes),
+        "cloud_wat:max_computation_time_mins": max(computation_time_total_minutes),
+        "cloud_wat:avg_computation_time_mins": np.mean(computation_time_total_minutes),
+        "cloud_wat:total_computation_time_hrs": np.sum(computation_time_total_minutes) / 60,
+        "cloud_wat:run_time_window": [min(run_time_starts), max(run_time_stops)],
+        "cloud_wat:min_volume_error_percent": min(error_percents),
+        "cloud_wat:max_volume_error_percent": max(error_percents),
+        "cloud_wat:avg_volume_error_percent": np.mean(error_percents),
+        "cloud_wat:unsuccessful_runs": len([s for s in solutions if s != "Unsteady Finished Successfully"]),
+    }
+    return stats
+
+
 def create_realization_ras_results_item(key_base: str, r: int):
     logger.info(f"Creating realization RAS results item: {key_base}, {r}")
     basename = os.path.basename(key_base)
     realization = f"r{str(r).zfill(4)}"
-    # fake_bbox = get_fake_extent().spatial.bboxes[0]
-    # fake_geometry = get_fake_geometry()
     geometry = get_2d_flow_area_perimeter(key_base + '.g01.hdf')
     bbox = geometry.bounds
+    properties = get_ras_realization_metadata(key_base, r)
     item = pystac.Item(
         id=f"{basename}-{realization}",
-        properties={},
-        # bbox=fake_bbox,
+        properties=properties,
         bbox=bbox,
         datetime=datetime.now(),
-        # geometry=json.loads(shapely.to_geojson(fake_geometry)),
         geometry=json.loads(shapely.to_geojson(geometry)),
     )
     item.ext.add("proj")
-    # print('getting assets')
     for s in range(1, SIMULATIONS):
         assets = get_ras_output_assets(key_base, r, s)
         for asset in assets:
             item.add_asset(key=asset.title, asset=asset)
+    item.properties.update(get_ras_simulation_stats(item.assets.values()))
     return item
 
 
 def depth_grids_for_model_run(key_base: str, s: int):
-    # print('filtering objects')
     basename = os.path.basename(key_base)
     return filter_objects(
         pattern=rf"^FFRD_Kanawha_Compute\/runs\/{s}\/depth-grids\/{basename}\/.*\.tif$",
@@ -644,6 +690,7 @@ def get_plan_results_attrs(model_p01_key: str, h5f: Optional[h5py.File] = None) 
         "results_summary:computation_time_total": computation_time_total,
         "results_summary:computation_time_total_minutes": computation_time_total_minutes,
         "results_summary:run_time_window": summary_attrs.get("results_summary:run_time_window"),
+        "results_summary:solution": summary_attrs.get("results_summary:solution"),
     }
     results_attrs.update(results_summary)
 
@@ -722,6 +769,16 @@ def get_temporal_extent_from_item_assets(item: pystac.Item) -> pystac.TemporalEx
     return pystac.TemporalExtent(intervals=[dt_min, dt_max])
 
 
+def get_temporal_extent_from_collections(collections: List[pystac.Collection]) -> pystac.TemporalExtent:
+    temporal_extents = [c.extent.temporal.intervals for c in collections]
+    logger.info(temporal_extents)
+    starts = [t[0][0] for t in temporal_extents]
+    stops = [t[0][1] for t in temporal_extents]
+    dt_min = min(starts)
+    dt_max = max(stops)
+    return pystac.TemporalExtent(intervals=[dt_min, dt_max])
+
+
 def main():
     t1 = datetime.now()
     stac_path = Path('./stac')
@@ -734,35 +791,44 @@ def main():
     ras_model_bboxes = []
 
     ras_model_names = list_ras_model_names()
-    for i, ras_model_key_base in enumerate(ras_model_names):
+    for _, ras_model_key_base in enumerate(ras_model_names):
         logger.info(ras_model_key_base)
         ras_model_collection = create_ras_model_collection(ras_model_key_base)
         ras_model_bboxes.extend(ras_model_collection.extent.spatial.bboxes)
         ras_models_parent_collection.add_child(ras_model_collection)
 
+        logger.info(f"Creating realization collection: {ras_model_key_base}")
         realization_collection = create_ras_model_realization_collection(ras_model_key_base, 1)
         realization_collection.extent = ras_model_collection.extent
         ras_model_collection.add_child(realization_collection)
 
-        item = create_realization_ras_results_item(ras_model_key_base, 1)
-        item.properties = asset_extra_fields_intersection(item)
+        r = 1
+        logger.info(f"Creating realization item: r={r} {ras_model_key_base}")
+        item = create_realization_ras_results_item(ras_model_key_base, r)
+        # item.properties = asset_extra_fields_intersection(item)
+        logger.info("Setting item datetime based on assets")
         item.datetime = get_datetime_from_item_assets(item)
+        logger.info("Adding item to realization collection")
         realization_collection.add_item(item)
-        dedupe_asset_metadata(item)
+        # dedupe_asset_metadata(item)
 
+        logger.info("Settings temporal extent based on item assets")
         realization_collection.extent.temporal = get_temporal_extent_from_item_assets(item)
 
+        logger.info("Creating depth grids collection")
         depth_grids_collection = create_depth_grids_collection(ras_model_key_base, 1)
+        logger.info("Adding depth grids collection to realization collection")
         realization_collection.add_child(depth_grids_collection)
-
     
     spatial_extent = pystac.SpatialExtent(ras_model_bboxes)
-    temporal_extent = pystac.TemporalExtent(intervals=[datetime.now(), datetime.now()])
+    # temporal_extent = pystac.TemporalExtent(intervals=[datetime.now(), datetime.now()])
+    temporal_extent = get_temporal_extent_from_collections(ras_models_parent_collection.get_children())
     ras_models_parent_collection.extent = pystac.Extent(spatial=spatial_extent, temporal=temporal_extent)
 
+    logger.info("Adding ras models collection to parent catalog")
     catalog.add_child(ras_models_parent_collection)
+    logger.info("Saving catalog")
     catalog.normalize_and_save(root_href=ROOT_HREF, catalog_type=pystac.CatalogType.SELF_CONTAINED)
-    # print(CATALOG_URL)
     logger.info("Done.")
     t2 = datetime.now()
     logger.info(f"Took: {(t2 - t1).total_seconds() / 60:0.2f} min")
