@@ -1,5 +1,8 @@
+nohup.out
+
 # output directory
 stac
+stac-gzip
 
 # venv
 venv*
