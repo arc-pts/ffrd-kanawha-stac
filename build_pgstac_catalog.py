@@ -8,6 +8,7 @@ import numpy as np
 import pystac
 import shapely
 
+import argparse
 import json
 import logging
 import os
@@ -38,14 +39,13 @@ CATALOG_TIMESTAMP = datetime.now().strftime('%Y%m%d-%H%M')
 ROOT_HREF = f"./pgstac/pgstac-kanawha-models-{CATALOG_TIMESTAMP}"
 
 REALIZATION = 1
-SIMULATIONS = 10
 
 
 def create_catalog() -> pystac.Catalog:
     return pystac.Catalog(
-        id="kanawha-pilot-pgstac",
+        id="kanawha-pilot-ras",
         description="pgstac catalog for the Kanawha produced under an FFRD pilot project",
-        title="Kanawha Models (pgstac)"
+        title="Kanawha HEC-RAS Models (pgstac)"
     )
 
 
@@ -77,7 +77,7 @@ def create_models_collection() -> pystac.Collection:
         items.append(item)
     extent = pystac.Extent.from_items(items)
     collection = pystac.Collection(
-        id="kanawha-pilot-pgstac-models",
+        id="kanawha-pilot-ras-models",
         description="Kanawha HEC-RAS models",
         extent=extent,
     )
@@ -165,7 +165,7 @@ def create_model_simulation_items(ras_model_name: str, model_item: pystac.Item, 
     return items
 
 
-def main():
+def main(limit: Optional[int] = None):
     stac_path = Path('./pgstac')
     if stac_path.exists():
         shutil.rmtree(stac_path)
@@ -179,21 +179,25 @@ def main():
     model_simulations = []
 
     for ras_model in ras_models_collection.get_items():
-        # model_simulation_items = create_model_simulation_items(ras_model.id, ras_model, limit=SIMULATIONS)
-        model_simulation_items = create_model_simulation_items(ras_model.id, ras_model)
-        model_simulations.extend(model_simulation_items)
+        model_simulation_items = create_model_simulation_items(ras_model.id, ras_model, limit=limit)
 
         realization_item = create_model_realization_item(ras_model.id, REALIZATION, ras_model, model_simulation_items)
-        # item_json = json.dumps(realization_item.to_dict())
+        realization_item.add_derived_from(ras_model)
+
+        for model_sim in model_simulation_items:
+            model_sim.add_derived_from(ras_model)
+            model_sim.add_derived_from(realization_item)
+
+        model_simulations.extend(model_simulation_items)
         model_realizations.append(realization_item)
 
     model_realizations_collection = pystac.Collection(
-        id="kanawha-pilot-pgstac-model-realizations",
+        id="kanawha-pilot-ras-model-realizations",
         description="Kanawha HEC-RAS model realizations",
         extent=pystac.Extent.from_items(model_realizations),
     )
     model_simulations_collection = pystac.Collection(
-        id="kanawha-pilot-pgstac-model-simulations",
+        id="kanawha-pilot-ras-model-simulations",
         description="Kanawha HEC-RAS model simulations",
         extent=pystac.Extent.from_items(model_simulations),
     )
@@ -210,4 +214,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Build pgstac catalog')
+    parser.add_argument('--limit', type=int, help='Limit the number of simulations to process')
+    args = parser.parse_args()
+    main(args.limit)
