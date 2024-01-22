@@ -46,7 +46,9 @@ BUCKET = s3.Bucket(BUCKET_NAME)
 CATALOG_TIMESTAMP = datetime.now().strftime('%Y%m%d-%H%M')
 ROOT_HREF = f"./stac/kanawha-models-{CATALOG_TIMESTAMP}"
 
-MODELS_CATALOG_ID = "kanawha-models"
+WATERSHED_NAME = "kanawha"
+CATALOG_TYPE = "models"
+MODELS_CATALOG_ID = f"{WATERSHED_NAME}-{CATALOG_TYPE}"
 RAS_MODELS_COLLECTION_ID = f"{MODELS_CATALOG_ID}-ras"
 
 CATALOG_URL = f"https://radiantearth.github.io/stac-browser/#/external/wsp-kanawha-pilot-stac.s3.amazonaws.com/{MODELS_CATALOG_ID}-{CATALOG_TIMESTAMP}/catalog.json"
@@ -58,11 +60,11 @@ SIMULATIONS = 1001 + 1
 AWS_SESSION = AWSSession(boto3.Session())
 
 
-def create_catalog():
+def create_catalog(watershed_name:str="Kanawha", catalog_type:str="Models") -> pystac.Catalog:
     catalog = pystac.Catalog(
-        id=MODELS_CATALOG_ID,
-        description="Models for the Kanawha produced under an FFRD pilot project",
-        title="Kanawha Models"
+        id=f"{watershed_name}-{catalog_type}",
+        description=f"{catalog_type.title()} for the {watershed_name} produced under an FFRD pilot project",
+        title=f"{watershed_name.title()} {catalog_type.title()}"
     )
     return catalog
 
@@ -104,11 +106,11 @@ def get_simulation_string(r: int) -> str:
     return simulation 
 
 
-def create_ras_models_parent_collection():
+def create_ras_models_parent_collection(watershed_name:str="Kanawha"):
     collection = pystac.Collection(
         id=RAS_MODELS_COLLECTION_ID,
         title="HEC-RAS Models",
-        description="HEC-RAS Models for the Kanawha",
+        description=f"HEC-RAS Models for the {watershed_name}",
         extent=get_fake_extent(),
     )
     return collection
