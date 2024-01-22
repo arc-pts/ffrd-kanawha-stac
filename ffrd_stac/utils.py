@@ -40,3 +40,14 @@ def intersect_dicts(dicts: List[dict]) -> dict:
                 if results[k] != v:
                     results[k] = None
     return results
+
+
+def flatten_dict_list(dict_list):
+    flat_list = []
+    for d in dict_list:
+        for value in d.values():
+            if isinstance(value, list):
+                flat_list.extend(value)
+            else:
+                flat_list.append(value)
+    return flat_list
