@@ -261,7 +261,7 @@ class RasGeomHdf(RasHdf):
         if projection is not None:
             return projection.decode('utf-8')
 
-    def get_2d_flow_area_perimeter(self, simplify: float = 0.001, wgs84: bool = True) -> Optional[shapely.Polygon]:
+    def get_2d_flow_area_perimeter(self, simplify: Optional[float] = None, wgs84: bool = True) -> Optional[shapely.Polygon]:
         d2_flow_area = get_first_hdf_group(self.get('Geometry/2D Flow Areas'))
         if d2_flow_area is None:
             return None
@@ -269,7 +269,9 @@ class RasGeomHdf(RasHdf):
         if perim is None:
             return None
         perim_coords = perim[:]
-        perim_polygon = shapely.Polygon(perim_coords).simplify(simplify)
+        perim_polygon = shapely.Polygon(perim_coords)
+        if simplify is not None:
+            perim_polygon = perim_polygon.simplify(simplify)
         if wgs84:
             proj_wkt = self.get_projection()
             if proj_wkt is not None:
