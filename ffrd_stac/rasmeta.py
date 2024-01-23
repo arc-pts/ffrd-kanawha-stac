@@ -309,7 +309,9 @@ class RasGeomHdf(RasHdf):
             return None
         
         perim_coords = perim[:]
-        perim_polygon = shapely.Polygon(perim_coords).simplify(simplify)
+        perim_polygon = shapely.Polygon(perim_coords)
+        if simplify is not None:
+            perim_polygon = perim_polygon.simplify(simplify)
         if wgs84:
             proj_wkt = self.get_projection()
             if proj_wkt is not None:
