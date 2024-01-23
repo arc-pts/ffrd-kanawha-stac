@@ -1,8 +1,10 @@
 nohup.out
 
-# output directory
+# output directories
+pgstac
 stac
 stac-gzip
+meta
 
 # venv
 venv*

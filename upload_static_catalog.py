@@ -5,7 +5,7 @@ import argparse
 import gzip
 
 
-def upload_files_to_s3(bucket_name, directory, compress: bool = False):
+def upload_files_to_s3(bucket_name, directory: str, compress: bool = False):
     extra_args = {'ContentType': 'application/json'}
     if compress:
         extra_args.update({'ContentEncoding': 'gzip'})
@@ -14,7 +14,11 @@ def upload_files_to_s3(bucket_name, directory, compress: bool = False):
         for file in files:
             full_path = os.path.join(subdir, file)
             try:
-                s3_path = full_path[len(directory):]
+                if directory.endswith('/'):
+                    directory_path_len = len(directory)
+                else:
+                    directory_path_len = len(directory) + 1    
+                s3_path = full_path[directory_path_len:]
                 with open(full_path, 'rb') as f:
                     if compress:
                         f = gzip.compress(f.read())
