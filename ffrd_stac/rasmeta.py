@@ -2,13 +2,17 @@ from datetime import datetime, timedelta
 import re
 from typing import Any, Optional, Tuple
 import warnings
-
+import zipfile 
+import os
 import fsspec
 import h5py
 import numpy as np
 import pyproj
 import shapely
 import shapely.ops
+import boto3
+from io import BytesIO
+import logging
 
 
 def to_snake_case(text):
@@ -150,9 +154,7 @@ def geom_to_4326(s: shapely.Geometry, proj_wkt: str) -> shapely.Geometry:
     transformer = pyproj.Transformer.from_proj(source_crs, target_crs, always_xy=True)
     return shapely.ops.transform(transformer.transform, s)
 
-
 class RasHdf(h5py.File):
-
     def __init__(self, name, mode='r', **kwargs):
         super().__init__(name, mode, **kwargs)
 
@@ -167,6 +169,28 @@ class RasHdf(h5py.File):
         if projection is not None:
             attrs["proj:wkt2"] = projection
         return attrs
+
+    @classmethod
+    def hdf_from_zip(cls, bucket_name, zip_file_key, hdf_file_name, ras_hdf_type, mode='r', **kwargs):
+        """
+        acceptable parameters for ras_hdf_type are `plan` or `geom`
+        """
+        s3 = boto3.client('s3')
+        response = s3.get_object(Bucket=bucket_name, Key=zip_file_key)
+
+        with zipfile.ZipFile(BytesIO(response['Body'].read())) as zip_ref:
+            if hdf_file_name not in zip_ref.namelist():
+                raise FileNotFoundError(f"{hdf_file_name} not found in the zip file.")
+
+            with zip_ref.open(hdf_file_name) as hdf_file:
+                hdf_content = hdf_file.read()
+
+        if ras_hdf_type == "plan":
+            return RasPlanHdf(BytesIO(hdf_content), mode, **kwargs)
+        elif ras_hdf_type == "geom":    
+            return RasGeomHdf(BytesIO(hdf_content), mode, **kwargs)
+        else:
+            return cls(BytesIO(hdf_content), mode, **kwargs)
 
 
 class RasPlanHdf(RasHdf):
@@ -231,7 +255,7 @@ class RasPlanHdf(RasHdf):
 class RasGeomHdf(RasHdf):
 
     def __init__(self, name, mode='r', **kwargs):
-        super().__init__(name, mode, **kwargs)
+        super().__init__(name, mode, **kwargs) 
 
     def get_geom_attrs(self):
         attrs = self.get_attrs()
@@ -246,7 +270,12 @@ class RasGeomHdf(RasHdf):
             structures_attrs = hdf5_attrs_to_dict(structures.attrs, prefix="Structures")
             attrs.update(structures_attrs)
 
-        d2_flow_area = get_first_hdf_group(self.get('Geometry/2D Flow Areas'))
+        try:
+            d2_flow_area = get_first_hdf_group(self.get('Geometry/2D Flow Areas'))
+        except AttributeError:
+            logging.warning("Unable to get 2D Flow Area; Geometry/2D Flow Areas group not found in HDF5 file.")   
+            return attrs
+        
         if d2_flow_area is not None:
             d2_flow_area_attrs = hdf5_attrs_to_dict(d2_flow_area.attrs, prefix="2D Flow Areas")
             cell_average_size = d2_flow_area_attrs.get('2d_flow_area:cell_average_size', None)
@@ -257,17 +286,28 @@ class RasGeomHdf(RasHdf):
         return attrs
 
     def get_projection(self) -> Optional[str]:
-        projection = self.attrs.get("Projection")
+        try:
+            projection = self.attrs.get("Projection")
+        except AttributeError:
+            logging.warning("Unable to get projection; Projection attribute not found in HDF5 file.")   
+            return None 
         if projection is not None:
             return projection.decode('utf-8')
 
-    def get_2d_flow_area_perimeter(self, simplify: Optional[float] = None, wgs84: bool = True) -> Optional[shapely.Polygon]:
-        d2_flow_area = get_first_hdf_group(self.get('Geometry/2D Flow Areas'))
+    def get_2d_flow_area_perimeter(self, simplify: float = 0.001, wgs84: bool = True) -> Optional[shapely.Polygon]:
+        try:
+            d2_flow_area = get_first_hdf_group(self.get('Geometry/2D Flow Areas'))
+        except AttributeError:
+            logging.warning("Unable to get 2D Flow Area perimeter; Geometry/2D Flow Areas group not found in HDF5 file.")   
+            return None
+        
         if d2_flow_area is None:
             return None
+        
         perim = d2_flow_area.get('Perimeter')
         if perim is None:
             return None
+        
         perim_coords = perim[:]
         perim_polygon = shapely.Polygon(perim_coords)
         if simplify is not None:
