@@ -51,7 +51,7 @@ def create_catalog() -> pystac.Catalog:
 
 def create_model_item(ras_model_name: str) -> pystac.Item:
     logger.info(f"Creating STAC item for model {ras_model_name}")
-    ras_geom_hdf_url = f"s3://{BUCKET_NAME}/FFRD_Kanawha_Compute/runs/1/ras/{ras_model_name}/{ras_model_name}.p01.hdf"
+    ras_geom_hdf_url = f"s3://{BUCKET_NAME}/FFRD_Kanawha_Compute/sims/ressim/1/ras/{ras_model_name}/{ras_model_name}.p01.hdf"
     ras_hdf = RasGeomHdf.open_url(ras_geom_hdf_url)
     perimeter = ras_hdf.get_2d_flow_area_perimeter(simplify=100.0)  # simplify with tolerance in model units
     properties = ras_hdf.get_geom_attrs()

@@ -33,12 +33,13 @@ load_dotenv()
 
 BUCKET_NAME = "kanawha-pilot"
 RAS_MODELS_PREFIX = "FFRD_Kanawha_Compute/ras"
-OUTPUT_PATH = "FFRD_Kanawha_Compute/runs/{simulation}/ras/{ras_model}/{ras_model}.p01.hdf"
+#OUTPUT_PATH = "FFRD_Kanawha_Compute/runs/{simulation}/ras/{ras_model}/{ras_model}.p01.hdf"
+OUTPUT_PATH = "FFRD_Kanawha_Compute/sims/ressim/{simulation}/ras/{ras_model_dir}/{ras_model}.p01.hdf"
 SIMULATIONS = 1001
 
 
-def get_simulation_metadata(bucket: Bucket, ras_model: str, simulation: int) -> dict:
-    plan_hdf_key = OUTPUT_PATH.format(simulation=simulation, ras_model=ras_model)
+def get_simulation_metadata(bucket: Bucket, ras_model_dir: str, ras_model: str, simulation: int) -> dict:
+    plan_hdf_key = OUTPUT_PATH.format(simulation=simulation, ras_model_dir=ras_model_dir, ras_model=ras_model)
     s3url = f"s3://{bucket.name}/{plan_hdf_key}"
     s3f = fsspec.open(s3url, mode="rb")
     metadata = {
@@ -56,18 +57,18 @@ def get_simulation_metadata(bucket: Bucket, ras_model: str, simulation: int) -> 
     return metadata
 
 
-def get_ras_model_metadata(bucket: Bucket, ras_model: str) -> List[dict]:
+def get_ras_model_metadata(bucket: Bucket, ras_model_dir: str, ras_model: str) -> List[dict]:
     results = []
     for simulation in range(1, SIMULATIONS + 1):
         logger.info(f"Getting RAS simulation output metadata for {ras_model} sim {simulation} of {SIMULATIONS}")
-        metadata = get_simulation_metadata(bucket, ras_model, simulation)
+        metadata = get_simulation_metadata(bucket, ras_model_dir, ras_model, simulation)
         results.append(metadata)
     return results
 
 
-def get_ras_model_geom(bucket: Bucket, ras_model: str) -> dict:
+def get_ras_model_geom(bucket: Bucket, ras_model_dir: str, ras_model: str) -> dict:
     logger.info(f"Getting RAS model geometry: {ras_model}")
-    plan_hdf_key = OUTPUT_PATH.format(simulation=1, ras_model=ras_model)
+    plan_hdf_key = OUTPUT_PATH.format(simulation=1, ras_model_dir=ras_model_dir, ras_model=ras_model)
     ras_plan_hdf = RasGeomHdf.open_url(f"s3://{bucket.name}/{plan_hdf_key}")
     polygon = ras_plan_hdf.get_2d_flow_area_perimeter()
     return json.loads(shapely.to_geojson(polygon))
@@ -82,15 +83,15 @@ def main(bucket_name: str, geometry_only: bool = False):
     ras_model_names = list_ras_model_names(bucket, RAS_MODELS_PREFIX)
     logger.info(ras_model_names)
     geoms = {}
-    for ras_model in ras_model_names:
+    for ras_model_dir, ras_model in ras_model_names:
         logger.info(f"Processing {ras_model}")
         if geometry_only:
-            geom = get_ras_model_geom(bucket, ras_model)
+            geom = get_ras_model_geom(bucket, ras_model_dir, ras_model)
             geoms[ras_model] = geom
             with open(meta_path / "geoms.json", "w") as f:
                 json.dump(geoms, f)
         else:
-            metadata = get_ras_model_metadata(bucket, ras_model)
+            metadata = get_ras_model_metadata(bucket, ras_model_dir, ras_model)
             ndjson = "\n".join([json.dumps(m) for m in metadata])
             model_meta_path = meta_path / f"{ras_model}.ndjson"
             logger.info(f"Writing metadata to {model_meta_path}")

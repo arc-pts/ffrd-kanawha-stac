@@ -22,7 +22,14 @@ def filter_objects(bucket: Bucket, pattern: str = None, prefix: str = None) -> L
 def list_ras_model_names(bucket: Bucket, prefix: str) -> list:
     plan_hdfs_pattern = r".*\.p01\.hdf$"
     ras_plan_hdfs = list(filter_objects(bucket, prefix=prefix, pattern=plan_hdfs_pattern))
-    return [hdf.key[:-8].split("/")[-1] for hdf in ras_plan_hdfs]
+    results = []
+    for hdf in ras_plan_hdfs:
+        hdf_key_no_ext = hdf.key[:-8]
+        model_dir = hdf_key_no_ext.split("/")[-2]
+        model_name = hdf_key_no_ext.split("/")[-1]
+        results.append((model_dir, model_name))
+    return results
+    # return [hdf.key[:-8].split("/")[-1] for hdf in ras_plan_hdfs]
 
 
 def get_dict_values(dicts: List[dict], key: Any) -> List[dict]:
